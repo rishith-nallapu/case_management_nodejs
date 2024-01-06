@@ -1,19 +1,20 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
-const multer = require('multer');
-const path = require('path');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = 5000;
 app.use(cors());
 
 mongoose.connect('mongodb://127.0.0.1:27017/User_authentication', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+  useNewUrlParser: true, 
+  // useUnifiedTopology: true, 
+  
 });
+
 
 const db = mongoose.connection;
 
@@ -22,22 +23,7 @@ db.once('open', () => {
   console.log('Connected to MongoDB');
 });
 
-const storage = multer.diskStorage({
-  destination: './uploads',
-  filename: (req, file, cb) => {
-    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
-  },
-});
 
-const upload = multer({ storage });
-
-const fileSchema = new mongoose.Schema({
-  originalFilename: String, // Add this field
-  filename: String,
-  path: String,
-});
-
-const File = mongoose.model('File', fileSchema);
 
 app.use(bodyParser.json());
 
@@ -51,10 +37,77 @@ const userSchema = new mongoose.Schema({
   yearsOfExperience: Number,
   courtType: String,
   mobileNumber: String,
+  email: String,
   password: String,
 });
 
+const Advocate = mongoose.model('Advocate', userSchema);
 const User = mongoose.model('User', userSchema);
+const Registrar = mongoose.model('Registrar', userSchema);
+
+app.post('/api/register2', async (req, res) => {
+  const clientData = req.body;
+
+  try {
+    // Hash the password before saving
+    const hashedPassword = await bcrypt.hash(clientData.password, 10);
+
+    // Create a new advocate with the hashed password
+    const newClient = new User({
+      state: clientData.state,
+      barRegistrationNumber: clientData.barRegistrationNumber,
+      username: clientData.username,
+      dateOfBirth: clientData.dateOfBirth,
+      gender: clientData.gender,
+      yearsOfExperience: clientData.yearsOfExperience,
+      casesDealtWith: clientData.casesDealtWith,
+      courtType: clientData.courtType,
+      email: clientData.email,
+      mobileNumber: clientData.mobileNumber,
+      password: hashedPassword, // Store the hashed password
+    });
+
+    // Save the advocate to the database
+    await newClient.save();
+
+    res.json({ success: true, message: 'Advocate registration successful' });
+  } catch (error) {
+    console.error('Error during advocate registration:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/register3', async (req, res) => {
+  const RegistrarData = req.body;
+
+  try {
+    // Hash the password before saving
+    const hashedPassword = await bcrypt.hash(RegistrarData.password, 10);
+
+    // Create a new advocate with the hashed password
+    const newRegistrar = new Registrar({
+      state: RegistrarData.state,
+      barRegistrationNumber: RegistrarData.barRegistrationNumber,
+      username: RegistrarData.username,
+      dateOfBirth:RegistrarData.dateOfBirth,
+      gender: RegistrarData.gender,
+      yearsOfExperience: RegistrarData.yearsOfExperience,
+      casesDealtWith: RegistrarData.casesDealtWith,
+      courtType: RegistrarData.courtType,
+      email:RegistrarData.email,
+      mobileNumber:RegistrarData.mobileNumber,
+      password: hashedPassword, // Store the hashed password
+    });
+
+    // Save the advocate to the database
+    await newRegistrar.save();
+
+    res.json({ success: true, message: 'Advocate registration successful' });
+  } catch (error) {
+    console.error('Error during advocate registration:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
 
 
 app.post('/api/signup', async (req, res) => {
@@ -95,10 +148,85 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.post('/api/signup2', async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
+    const existingRegistrar = await Registrar.findOne({ username });
+
+    if (existingRegistrar) {
+      res.status(409).json({ success: false, message: 'Username already exists' });
+    } else {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const newRegistrar = new Registrar({ username, password: hashedPassword });
+      await Registrar.create(newRegistrar);
+      console.log('User signup success');
+      res.json({ success: true });
+    }
+  } catch (error) {
+    console.error('Error during signup:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/login2', async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
+    const registrar = await Registrar.findOne({ username });
+
+    if (registrar && (await bcrypt.compare(password, registrar.password))) {
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ success: false, message: 'Invalid username or password' });
+    }
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/signup3', async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
+    const existingAdvocate = await Advocate.findOne({ username });
+
+    if (existingUser) {
+      res.status(409).json({ success: false, message: 'Username already exists' });
+    } else {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const newAdvocate = new Advocate({ username, password: hashedPassword });
+      await Advocate.create(newAdvocate);
+      console.log('User signup success');
+      res.json({ success: true });
+    }
+  } catch (error) {
+    console.error('Error during signup:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/login3', async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
+    const advocate = await Advocate.findOne({ username });
+
+    if (advocate && (await bcrypt.compare(password, advocate.password))) {
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ success: false, message: 'Invalid username or password' });
+    }
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
 
 
 // for lists
-const Advocate = mongoose.model('Advocate', userSchema);
+
 app.post('/api/register', async (req, res) => {
   const advocateData = req.body;
 
@@ -116,6 +244,7 @@ app.post('/api/register', async (req, res) => {
       yearsOfExperience: advocateData.yearsOfExperience,
       casesDealtWith: advocateData.casesDealtWith,
       courtType: advocateData.courtType,
+      email: advocateData.email,
       mobileNumber: advocateData.mobileNumber,
       password: hashedPassword, // Store the hashed password
     });
@@ -142,38 +271,92 @@ app.get('/api/advocates', async (req, res) => {
 
 
 
-// Update the file creation logic to store the original filename
-app.post('/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded.' });
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'm78595322@gmail.com', // Your Gmail email address
+    pass: 'ycwc xxpx oqre wtun', // Your Gmail email password
+  },
+});
+
+// Function to generate a random OTP
+const generateOTP = () => {
+  const digits = '0123456789';
+  let otp = '';
+
+  for (let i = 0; i < 6; i++) {
+    const randomIndex = Math.floor(Math.random() * digits.length);
+    otp += digits[randomIndex];
   }
 
-  const newFile = new File({
-    originalFilename: req.file.originalname,
-    filename: req.file.filename,
-    path: `/uploads/${req.file.filename}`,
+  return otp;
+};
+
+app.post('/api/send-otp', async (req, res) => {
+  const { mobileNumber, email } = req.body;
+
+  // Generate OTPs
+  const mobileOTP = generateOTP();
+  const emailOTP = generateOTP();
+
+  // Save OTPs to the database
+  try {
+    await OTP.create({ email, otp: emailOTP });
+  } catch (error) {
+    console.error('Error saving email OTP to the database:', error);
+    return res.status(500).json({ error: 'Error saving email OTP' });
+  }
+
+  // Implement your logic to send mobile OTP (use SMS gateway or any other service)
+
+  const mailOptions = {
+    from: 'm78595322@gmail.com',
+    to: email,
+    subject: 'Your OTP for Verification',
+    text: `Your One-Time Password (OTP) for registration is: ${emailOTP}`,
+  };
+
+  // Send email with OTP
+  transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.error('Error sending email:', error);
+      return res.status(500).json({ error: 'Error sending email' });
+    } else {
+      console.log('Email sent:', info.response);
+      res.json({ success: true, message: 'OTP sent successfully' });
+    }
   });
-
-  try {
-    await newFile.save();
-    res.json({ filePath: newFile.path });
-  } catch (error) {
-    console.error('Error saving file to database:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
 });
 
-// Add this endpoint to handle GET requests for fetching documents
-app.get('/files', async (req, res) => {
-  try {
-    const files = await File.find();
-    res.json(files);
-  } catch (error) {
-    console.error('Error fetching documents:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+
+const otpSchema = new mongoose.Schema({
+  email: String,
+  otp: String,
 });
 
+const OTP = mongoose.model('OTP', otpSchema);
+
+app.post('/api/verify-otp', async (req, res) => {
+  const { email, otp } = req.body;
+
+  try {
+    // Check if the entered OTP matches the stored OTP
+    const storedOTP = await OTP.findOne({ email, otp });
+
+    if (storedOTP) {
+      // If OTP is valid, you can perform additional actions here
+      // For example, mark the email as verified in your user schema
+
+
+      res.json({ success: true, message: 'OTP verified successfully' });
+    } else {
+      res.json({ success: false, message: 'Invalid OTP' });
+    }
+  } catch (error) {
+    console.error('Error during OTP verification:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
 
 
 app.listen(PORT, () => {
