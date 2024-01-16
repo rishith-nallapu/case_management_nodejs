@@ -291,9 +291,16 @@ const caseSchema = new mongoose.Schema({
   defendantAddress: String,
   subject: String,
   filingDate: String,
+  issuingDay: String,
+  issuingDate: String,
+  issuingTime: String,
   cnrNumber: {
     type: String,
     unique: true,
+  },
+  progressLevel: {
+    type: String,
+    default: 'pending',
   },
 });
 
@@ -316,14 +323,83 @@ app.post('/api/cases', async (req, res) => {
   }
 });
 
-// Express route to handle form submissions
-app.get('/api/cases', async (req, res) => {
-
-  const { district } = req.query;
+app.post('/api/update-progress', async (req, res) => {
+  const { caseId, progressLevel } = req.body;
 
   try {
-    // Fetch cases based on the district
-    const cases = await CaseModel.find({ district });
+    // Update the progress level of the specified case
+    const updatedCase = await CaseModel.findByIdAndUpdate(
+      caseId,
+      { $set: { progressLevel } },
+      { new: true } // Return the updated document
+    );
+
+    if (!updatedCase) {
+      return res.status(404).json({ success: false, message: 'Case not found' });
+    }
+
+    res.json({ success: true, updatedCase });
+  } catch (error) {
+    console.error('Error updating progress level:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+app.get('/api/progress-levels', async (req, res) => {
+  try {
+    const progressLevels = await CaseModel.find().select('_id progressLevel');
+    const progressLevelsMap = {};
+
+    progressLevels.forEach((caseItem) => {
+      progressLevelsMap[caseItem._id] = caseItem.progressLevel;
+    });
+
+    res.json(progressLevelsMap);
+  } catch (error) {
+    console.error('Error fetching progress levels:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+});
+
+app.get('/api/progress-level', async (req, res) => {
+  try {
+    const { cnrNumber } = req.query;
+
+    // Assuming "Case" is your Mongoose model
+    const caseData = await CaseModel.findOne({ cnrNumber });
+
+    if (!caseData) {
+      return res.status(404).json({ error: 'Case not found' });
+    }
+
+    res.json({ progressLevel: caseData.progressLevel });
+  } catch (error) {
+    console.error('Error fetching progress level:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+// Express route to handle form submissions
+app.get('/api/cases', async (req, res) => {
+  const { district, cnrNumber } = req.query;
+
+  const { sortBy = 'filingDate', sortOrder = 'asc' } = req.query;
+  const sortOptions = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+
+
+  try {
+    // Construct the query based on available parameters
+    const query = {};
+    if (district) {
+      query.district = district;
+    }
+    if (cnrNumber) {
+      query.cnrNumber = cnrNumber;
+    }
+
+    // Fetch cases based on the constructed query
+    const cases = await CaseModel.find(query).sort(sortOptions);
 
     // Map the cases to include only the necessary fields
     const formattedCases = cases.map(({ _id, subject, caseType, filingDate, plaintiffName, defendantName, cnrNumber }) => ({
@@ -338,11 +414,10 @@ app.get('/api/cases', async (req, res) => {
 
     res.json(formattedCases);
   } catch (error) {
-    console.error('Error fetching cases by district:', error);
+    console.error('Error fetching cases:', error);
     res.status(500).json({ message: 'Internal Server Error' });
   }
 });
-
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -399,6 +474,113 @@ app.post('/api/send-otp', async (req, res) => {
       res.json({ success: true, message: 'OTP sent successfully' });
     }
   });
+});
+
+app.post('/api/forgotpassword', async (req, res) => {
+  const { username, email, userType } = req.body;
+
+  try {
+    let user;
+
+    // Check user type and find the user in the corresponding collection
+    if (userType === 'client') {
+      user = await User.findOne({ username, email });
+    } else if (userType === 'registrar') {
+      user = await Registrar.findOne({ username, email });
+    } else if (userType === 'advocate') {
+      user = await Advocate.findOne({ username, email });
+    } else {
+      return res.status(400).json({ error: 'Invalid user type' });
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Generate OTPs
+    const emailOTP = generateOTP();
+
+    try {
+      await OTP.create({ email, otp: emailOTP });
+    } catch (error) {
+      console.error('Error saving email OTP to the database:', error);
+      return res.status(500).json({ error: 'Error saving email OTP' });
+    }
+
+    // Implement your logic to send mobile OTP (use SMS gateway or any other service)
+
+    const mailOptions = {
+      from: 'm78595322@gmail.com',
+      to: email,
+      subject: 'Your OTP for Verification',
+      text: `Your One-Time Password (OTP) for registration is: ${emailOTP}`,
+    };
+
+    // Send email with OTP
+    transporter.sendMail(mailOptions, (error, info) => {
+      if (error) {
+        console.error('Error sending email:', error);
+        return res.status(500).json({ error: 'Error sending email' });
+      } else {
+        console.log('Email sent:', info.response);
+        res.json({ success: true, message: 'OTP sent successfully' });
+      }
+    });
+  } catch (error) {
+    console.error('Error saving email OTP to the database:', error);
+    return res.status(500).json({ error: 'Error saving email OTP' });
+  }
+
+});
+
+app.post('/api/update-password', async (req, res) => {
+  const { username, userType, newPassword } = req.body;
+
+  try {
+    // Hash the new password before updating
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    let updatedUser;
+
+    // Update the user's password based on username and usertype
+    switch (userType) {
+      case 'client':
+        updatedUser = await User.findOneAndUpdate(
+          { username },
+          { $set: { password: hashedPassword } },
+          { new: true }
+        );
+        break;
+
+      case 'advocate':
+        updatedUser = await Advocate.findOneAndUpdate(
+          { username },
+          { $set: { password: hashedPassword } },
+          { new: true }
+        );
+        break;
+
+      case 'registrar':
+        updatedUser = await Registrar.findOneAndUpdate(
+          { username },
+          { $set: { password: hashedPassword } },
+          { new: true }
+        );
+        break;
+
+      default:
+        return res.status(400).json({ success: false, message: 'Invalid usertype' });
+    }
+
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Error updating password:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
 });
 
 
@@ -490,23 +672,23 @@ app.post('/api/generate-cnr', async (req, res) => {
 
     // Send emails to plaintiff, defendant, and plaintiff's advocate
     // Send emails to plaintiff, defendant, and plaintiff's advocate
-if (plaintiffDetails && plaintiffDetails.email) {
-  await sendEmail(plaintiffDetails.email, 'CNR Assigned', `Your case CNR is: ${cnrNumber}`);
-} else {
-  console.error('Plaintiff email not found');
-}
+    if (plaintiffDetails && plaintiffDetails.email) {
+      await sendEmail(plaintiffDetails.email, 'CNR Assigned', `Your case CNR is: ${cnrNumber}`);
+    } else {
+      console.error('Plaintiff email not found');
+    }
 
-if (defendantDetails && defendantDetails.email) {
-  await sendEmail(defendantDetails.email, 'CNR Assigned', `Your case CNR is: ${cnrNumber}`);
-} else {
-  console.error('Defendant email not found');
-}
+    if (defendantDetails && defendantDetails.email) {
+      await sendEmail(defendantDetails.email, 'CNR Assigned', `Your case CNR is: ${cnrNumber}`);
+    } else {
+      console.error('Defendant email not found');
+    }
 
-if (plaintiffAdvocateDetails && plaintiffAdvocateDetails.email) {
-  await sendEmail(plaintiffAdvocateDetails.email, 'CNR Assigned', `The case CNR is: ${cnrNumber}`);
-} else {
-  console.error('Plaintiff Advocate email not found');
-}
+    if (plaintiffAdvocateDetails && plaintiffAdvocateDetails.email) {
+      await sendEmail(plaintiffAdvocateDetails.email, 'CNR Assigned', `The case CNR is: ${cnrNumber}`);
+    } else {
+      console.error('Plaintiff Advocate email not found');
+    }
 
     res.json({ success: true, cnrNumber });
   } catch (error) {
@@ -616,7 +798,205 @@ app.delete('/files/:fileId', async (req, res) => {
   }
 });
 
+const clientSchema = new mongoose.Schema({
+  advocateUsername: String,
+  clientUsername: String,
+  clientEmail: String,
+  caseOverview: String,
+  accepted: {
+    type: Boolean,
+    default: false,
+  },
+});
 
+// Create a model for the clientslist collection
+const Client = mongoose.model('Client', clientSchema);
+
+// API endpoint to save client details
+app.post('/api/clientslist', async (req, res) => {
+  try {
+    const { advocateUsername, clientUsername, clientEmail, caseOverview } = req.body;
+
+    // Create a new client instance
+    const newClient = new Client({
+      advocateUsername,
+      clientUsername,
+      clientEmail,
+      caseOverview,
+    });
+
+    // Save the client to the database
+    await newClient.save();
+
+    res.json({ success: true, message: 'Client details saved successfully.' });
+  } catch (error) {
+    console.error('Error saving client details:', error);
+    res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
+});
+
+app.post('/api/validate-advocate', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Find the advocate by username
+    const advocate = await Advocate.findOne({ username });
+
+    if (advocate) {
+      // Compare the hashed password
+      const isPasswordValid = await bcrypt.compare(password, advocate.password);
+
+      if (isPasswordValid) {
+        res.json({ success: true, message: 'Credentials are valid.' });
+      } else {
+        res.json({ success: false, message: 'Invalid credentials.' });
+      }
+    } else {
+      res.json({ success: false, message: 'Advocate not found.' });
+    }
+  } catch (error) {
+    console.error('Error validating advocate credentials:', error);
+    res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
+});
+
+app.get('/api/client-details/:username', async (req, res) => {
+  try {
+    const advocateUsername = req.params.username;
+    const client = await Client.findOne({ advocateUsername, accepted: { $ne: true } });
+
+    if (client) {
+      const { clientUsername, caseOverview, clientEmail } = client;
+      res.json({ success: true, client: { clientUsername, caseOverview, clientEmail } });
+    } else {
+      res.json({ success: false, message: 'No client details found.' });
+    }
+  } catch (error) {
+    console.error('Error fetching client details:', error);
+    res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
+});
+
+// Add a new route to mark the case as accepted
+app.post('/api/mark-case-accepted/:username', async (req, res) => {
+  try {
+    const advocateUsername = req.params.username;
+
+    // Find and update the case to mark it as accepted
+    const updateResult = await Client.updateOne(
+      { advocateUsername, accepted: { $ne: true } },
+      { $set: { accepted: true } }
+    );
+
+    console.log('Update Result:', updateResult);
+
+    if (updateResult.nModified > 0) {
+      res.json({ success: true });
+    } else {
+      res.json({ success: false, message: 'Case already marked as accepted or not found.' });
+    }
+  } catch (error) {
+    console.error('Error marking case as accepted:', error);
+    res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
+});
+
+
+
+app.post('/api/accepted', async (req, res) => {
+  try {
+    const { to, subject, text } = req.body;
+
+    // Create a nodemailer transporter (replace with your email service details)
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: 'm78595322@gmail.com', // Replace with your Gmail email address
+        pass: 'ycwc xxpx oqre wtun', // Replace with your Gmail email password
+      },
+    });
+
+    const mailOptions = {
+      from: 'm78595322@gmail.com',
+      to,
+      subject,
+      text,
+    };
+
+    // Send the email
+    await transporter.sendMail(mailOptions);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
+});
+
+app.get('/api/cases/:advocateUsername', async (req, res) => {
+  try {
+    const { advocateUsername } = req.params;
+
+    // Check if the advocate is in the accepted state
+    const advocate = await Client.findOne({ advocateUsername, accepted: true });
+
+    if (!advocate) {
+      return res.status(404).json({ error: 'Advocate not found or not in accepted state' });
+    }
+
+    // If the advocate is in the accepted state, fetch all cases for the advocate
+    const casesData = await CaseModel.find({ plaintiffAdvocate: advocateUsername });
+
+    if (casesData.length === 0) {
+      return res.status(404).json({ error: 'No cases found for the advocate' });
+    }
+
+    res.json(casesData);
+  } catch (error) {
+    console.error('Error fetching cases:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/issuing-dates', async (req, res) => {
+  try {
+    const { cnrNumber, day, date, time } = req.body;
+
+    // Check if the CNR number has already been issued
+    const existingCase = await CaseModel.findOne({ cnrNumber });
+
+    if (existingCase && existingCase.issuingDay && existingCase.issuingDate && existingCase.issuingTime) {
+      // If already issued, return a conflict status (HTTP 409)
+      return res.status(409).json({ error: 'CNR number already issued' });
+    }
+
+    // Update the CaseModel with issuing dates
+    const updatedCase = await CaseModel.findOneAndUpdate(
+      { cnrNumber },
+      { issuingDay: day, issuingDate: date, issuingTime: time },
+      { new: true }
+    );
+
+    if (!updatedCase) {
+      return res.status(404).json({ error: 'Case not found' });
+    }
+
+    // Send emails to advocate, plaintiff, and defendant
+    const advocateData = await Advocate.findOne({ username: updatedCase.plaintiffAdvocate });
+    const plaintiffData = await User.findOne({ username: updatedCase.plaintiffName });
+    const defendantData = await User.findOne({ username: updatedCase.defendantName });
+
+    // Use the correct function name `sendEmail` instead of `rsendEmail`
+    sendEmail(advocateData.email, 'Issuing Dates Updated', `Your case ${cnrNumber} issuing dates have been updated. Issued on ${date} at ${time}.`);
+    sendEmail(plaintiffData.email, 'Issuing Dates Updated', `Your case ${cnrNumber} issuing dates have been updated. Issued on ${date} at ${time}.`);
+    sendEmail(defendantData.email, 'Issuing Dates Updated', `Your case ${cnrNumber} issuing dates have been updated. Issued on ${date} at ${time}.`);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating issuing dates:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
