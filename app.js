@@ -293,11 +293,12 @@ const caseSchema = new mongoose.Schema({
   pmobileNumber: String,
   plaintiffAddress: String,
   defendantAddress: String,
+  plaintiffEmail:String,
   subject: String,
   filingDate: String,
-  issuingDay: String,
-  issuingDate: String,
-  issuingTime: String,
+  issuedDay: String,
+  issuedDate: String,
+  issuedTime: String,
   count: {
     type: Number,
     default: 1,
@@ -311,6 +312,9 @@ const caseSchema = new mongoose.Schema({
     type: String,
     default: 'firstCourt',
   },
+  judge: String,          
+  decision: String,      
+  decisionDate: String,
 });
 
 const CaseModel = mongoose.model('Case', caseSchema);
@@ -391,9 +395,11 @@ app.get('/api/progress-level', async (req, res) => {
 
 app.get('/api/cases', async (req, res) => {
   const { district, cnrNumber, count } = req.query;
-
   const { sortBy = 'filingDate', sortOrder = 'asc' } = req.query;
-  const sortOptions = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+
+  // Construct the sort options
+  const sortOptions = {};
+  sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
   try {
     // Construct the query based on available parameters
@@ -408,8 +414,23 @@ app.get('/api/cases', async (req, res) => {
       query.count = count;
     }
 
-    // Fetch cases based on the constructed query
-    const cases = await CaseModel.find(query).sort(sortOptions);
+    // Fetch all cases for the specified district
+    let cases = await CaseModel.find(query);
+
+    // Separate cases by type: criminal, civil, and family
+    const criminalCases = cases.filter(caseItem => caseItem.caseType === 'criminal');
+    const civilCases = cases.filter(caseItem => caseItem.caseType === 'civil');
+    const familyCases = cases.filter(caseItem => caseItem.caseType === 'family');
+
+    // Sort criminal cases by filing date (oldest to newest)
+    criminalCases.sort((a, b) => new Date(a.filingDate) - new Date(b.filingDate));
+    // Sort civil cases by filing date (oldest to newest)
+    civilCases.sort((a, b) => new Date(a.filingDate) - new Date(b.filingDate));
+    // Sort family cases by filing date (oldest to newest)
+    familyCases.sort((a, b) => new Date(a.filingDate) - new Date(b.filingDate));
+
+    // Concatenate criminal, civil, and family cases
+    cases = [...criminalCases, ...civilCases, ...familyCases];
 
     // Map the cases to include only the necessary fields
     const formattedCases = cases.map(({ _id, subject, caseType, filingDate, plaintiffName, defendantName, cnrNumber, count }) => ({
@@ -429,7 +450,7 @@ app.get('/api/cases', async (req, res) => {
     res.status(500).json({ message: 'Internal Server Error' });
   }
 });
-
+``
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -822,6 +843,7 @@ const clientSchema = new mongoose.Schema({
   clientUsername: String,
   clientEmail: String,
   caseOverview: String,
+  caseType:String,
   accepted: {
     type: Boolean,
     default: false,
@@ -834,7 +856,7 @@ const Client = mongoose.model('Client', clientSchema);
 // API endpoint to save client details
 app.post('/api/clientslist', async (req, res) => {
   try {
-    const { advocateUsername, clientUsername, clientEmail, caseOverview } = req.body;
+    const { advocateUsername, clientUsername, clientEmail, caseOverview, caseType } = req.body;
 
     // Create a new client instance
     const newClient = new Client({
@@ -842,6 +864,7 @@ app.post('/api/clientslist', async (req, res) => {
       clientUsername,
       clientEmail,
       caseOverview,
+      caseType,
     });
 
     // Save the client to the database
@@ -898,8 +921,8 @@ app.get('/api/client-details/:username', async (req, res) => {
     });
 
     if (client) {
-      const { clientUsername, caseOverview, clientEmail } = client;
-      res.json({ success: true, client: { clientUsername, caseOverview, clientEmail } });
+      const { clientUsername, caseOverview, clientEmail,caseType } = client;
+      res.json({ success: true, client: { clientUsername, caseOverview, clientEmail, caseType } });
     } else {
       res.json({ success: false, message: 'No client details found.' });
     }
@@ -1069,7 +1092,7 @@ app.post('/api/issuing-dates', async (req, res) => {
     // Update the CaseModel with issuing dates
     const updatedCase = await CaseModel.findOneAndUpdate(
       { cnrNumber },
-      { issuingDay: day, issuingDate: date, issuingTime: time },
+      { issuedDay: day, issuedDate: date, issuedTime: time },
       { new: true }
     );
 
@@ -1083,9 +1106,9 @@ app.post('/api/issuing-dates', async (req, res) => {
     const defendantData = await User.findOne({ username: updatedCase.defendantName });
 
     // Use the correct function name `sendEmail` instead of `rsendEmail`
-    sendEmail(advocateData.email, 'Issuing Dates Updated', `Your case ${cnrNumber} issuing dates have been updated. Issued on ${date} at ${time}.`);
-    sendEmail(plaintiffData.email, 'Issuing Dates Updated', `Your case ${cnrNumber} issuing dates have been updated. Issued on ${date} at ${time}.`);
-    sendEmail(defendantData.email, 'Issuing Dates Updated', `Your case ${cnrNumber} issuing dates have been updated. Issued on ${date} at ${time}.`);
+    sendEmail(advocateData.email, 'Dates Assigned:', `Your case has been assigned trial dates. Case number: ${cnrNumber}. Dates issued: ${date} at ${time}.`);
+    sendEmail(plaintiffData.email, 'Dates Assigned:', `Your case has been assigned trial dates. Case number: ${cnrNumber}. Dates issued: ${date} at ${time}.`);
+    sendEmail(defendantData.email, 'Dates Assigned:', `Your case has been assigned trial dates. Case number: ${cnrNumber}. Dates issued: ${date} at ${time}.`);
 
     res.json({ success: true });
   } catch (error) {
@@ -1194,6 +1217,81 @@ app.get('/fetch-advocate-email/:name', async (req, res) => {
   } catch (error) {
     console.error('Error fetching advocate email:', error);
     res.status(500).json({ error: 'Error fetching advocate email' });
+  }
+});
+
+// Assuming you have already imported necessary modules (express, mongoose, etc.)
+
+// Search for completed and dismissal cases in the specified district
+app.get('/api/completed-dismissal-cases', async (req, res) => {
+  const { district } = req.query;
+  const initialCount = 3; // Initial count value
+
+  try {
+    // Search for cases with the specified district and progress levels indicating completion or dismissal
+    const completedCases = await CaseModel.countDocuments({ district, progressLevel: 'completed' });
+    const dismissalCases = await CaseModel.countDocuments({ district, progressLevel: 'dismissal' });
+
+    // Increment counts by the initial value
+    const incrementedCompletedCount = completedCases + initialCount;
+    const incrementedDismissalCount = dismissalCases + initialCount;
+
+    // Send the counts as a response
+    res.json({ completedCount: incrementedCompletedCount, dismissalCount: incrementedDismissalCount });
+  } catch (error) {
+    console.error('Error fetching completed and dismissal cases:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/case-details', async (req, res) => {
+  const { cnrNumber } = req.query;
+
+  try {
+    // Search for the case with the specified CNR number
+    const caseData = await CaseModel.findOne({ cnrNumber });
+
+    if (caseData) {
+      // Check the progress level of the case
+      if (caseData.progressLevel === 'dismissal' || caseData.progressLevel === 'completed') {
+        // If case is dismissal or completed, send the details as a response
+        res.json(caseData);
+      } else {
+        // If case is not dismissal or completed, send a 404 response
+        res.status(404).json({ error: 'Case not found' });
+      }
+    } else {
+      // If case is not found, send a 404 response
+      res.status(404).json({ error: 'Case not found' });
+    }
+  } catch (error) {
+    console.error('Error fetching case details:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/update-case-details/:cnrNumber', async (req, res) => {
+  const { cnrNumber } = req.params;
+  const { judge, decision, decisionDate } = req.body;
+
+  try {
+    // Find the case with the specified CNR number and update its details
+    const updatedCase = await CaseModel.findOneAndUpdate(
+      { cnrNumber },
+      { judge, decision, decisionDate },
+      { new: true } // Return the updated document
+    );
+
+    if (updatedCase) {
+      // If case is found and updated successfully, send the updated details as a response
+      res.json(updatedCase);
+    } else {
+      // If case is not found, send a 404 response
+      res.status(404).json({ error: 'Case not found' });
+    }
+  } catch (error) {
+    console.error('Error updating case details:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
